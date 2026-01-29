@@ -1,4 +1,3 @@
-from api_dashboard import router as api_router
 from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,10 +8,12 @@ import os
 from datetime import datetime
 import mysql.connector
 from mysql.connector import Error
+from api_dashboard import router as api_router
+
 
 app = FastAPI()
 
-app = FastAPI()
+print("ROUTES:", [r.path for r in app.routes])
 
 # CORS (DEV local + PROD dominio)
 app.add_middleware(
@@ -30,17 +31,8 @@ allow_origins=[
     allow_headers=["*"],
 )
 
-from api_dashboard import router as api_router
 app.include_router(api_router, prefix="/api")
 
-# Configuración de BD (desde Environment)
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "database": os.getenv("DB_NAME", "kpi_db"),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", ""),
-}
 
 def procesar_archivo_kpi(archivo_bytes: bytes, kpi_nombre: str) -> Dict[str, float]:
     """

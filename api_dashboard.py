@@ -6,13 +6,11 @@ from decimal import Decimal
 import mysql.connector
 from mysql.connector import Error
 
-# Fuente única de configuración BD
-from main import DB_CONFIG
+from config import DB_CONFIG  # <- sin circular import
 
 router = APIRouter()
 
 
-# ---------- Helpers ----------
 def _to_float(v):
     if v is None:
         return None
@@ -25,42 +23,27 @@ def _to_float(v):
 
 
 def get_db_conn():
-    """
-    Conexión usando DB_CONFIG definido en main.py (cargado desde Environment).
-    """
     try:
         return mysql.connector.connect(**DB_CONFIG)
     except Error as e:
         raise HTTPException(status_code=500, detail=f"Error conexión BD: {e}")
 
 
-# ---------- Endpoints ----------
 @router.post("/auth/login")
 def login(payload: Dict[str, Any]):
-    # DEMO (no tocar hoy)
+    # DEMO hoy (no tocar)
     email = payload.get("email")
     password = payload.get("password")
     if email == "admin@demo.cl" and password == "1234":
         return {
             "token": "dev-token",
-            "user": {
-                "nombre": "Admin Demo",
-                "email": email,
-                "rol": "supervisor",
-            },
+            "user": {"nombre": "Admin Demo", "email": email, "rol": "supervisor"},
         }
     return {"detail": "Credenciales inválidas"}
 
 
 @router.get("/kpis")
-def get_kpis(
-    meses: List[str] = Query(...),
-    ejecutivo: Optional[str] = None,
-):
-    """
-    Lee KPIs desde tabla kpi_monthly.
-    Mantiene exactamente el shape que consume el frontend.
-    """
+def get_kpis(meses: List[str] = Query(...), ejecutivo: Optional[str] = None):
     if not meses:
         return {"data": []}
 
@@ -91,7 +74,6 @@ def get_kpis(
 
     conn = get_db_conn()
     cur = None
-
     try:
         cur = conn.cursor(dictionary=True)
         cur.execute(sql, params)
@@ -99,32 +81,39 @@ def get_kpis(
 
         data = []
         for r in rows:
-            data.append({
-                "name": (r.get("ejecutivo") or "").strip(),
-                "mes": (r.get("mes") or "").strip(),
-                "tmo": _to_float(r.get("tmo")),
-                "transfEPA": _to_float(r.get("transfEPA")),
-                "tipificaciones": _to_float(r.get("tipificaciones")),
-                "satEp": _to_float(r.get("satEp")),
-                "resEp": _to_float(r.get("resEp")),
-                "satSnl": _to_float(r.get("satSnl")),
-                "resSnl": _to_float(r.get("resSnl")),
-            })
+            data.append(
+                {
+                    "name": (r.get("ejecutivo") or "").strip(),
+                    "mes": (r.get("mes") or "").strip(),
+                    "tmo": _to_float(r.get("tmo")),
+                    "transfEPA": _to_float(r.get("transfEPA")),
+                    "tipificaciones": _to_float(r.get("tipificaciones")),
+                    "satEp": _to_float(r.get("satEp")),
+                    "resEp": _to_float(r.get("resEp")),
+                    "satSnl": _to_float(r.get("satSnl")),
+                    "resSnl": _to_float(r.get("resSnl")),
+                }
+            )
 
         return {"data": data}
 
     except Error as e:
         raise HTTPException(status_code=500, detail=f"Error query KPIs: {e}")
-
     finally:
-        if cur:
-            cur.close()
-        conn.close()
+        try:
+            if cur:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @router.get("/kpis/historial")
 def get_historial():
-    # DEMO hoy (mañana presentación)
+    # DEMO hoy (presentación)
     return {
         "resEP": [80, 82, 85],
         "satEP": [90, 91, 92],
@@ -140,10 +129,7 @@ def auditoria(payload: Dict[str, Any]):
 
 
 @router.get("/recomendaciones")
-def get_recomendaciones(
-    ejecutivo: Optional[str] = None,
-    mes: Optional[str] = None,
-):
+def get_recomendaciones(ejecutivo: Optional[str] = None, mes: Optional[str] = None):
     return {
         "recomendaciones": [
             {
