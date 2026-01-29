@@ -33,12 +33,13 @@ allow_origins=[
 from api_dashboard import router as api_router
 app.include_router(api_router, prefix="/api")
 
-# Configuración de BD (ajustar con tus credenciales)
+# Configuración de BD (desde Environment)
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'database': os.getenv('DB_NAME', 'kpi_db'),
-    'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', '')
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": int(os.getenv("DB_PORT", "3306")),
+    "database": os.getenv("DB_NAME", "kpi_db"),
+    "user": os.getenv("DB_USER", "root"),
+    "password": os.getenv("DB_PASSWORD", ""),
 }
 
 def procesar_archivo_kpi(archivo_bytes: bytes, kpi_nombre: str) -> Dict[str, float]:
