@@ -79,6 +79,10 @@ def get_kpis(meses: List[str] = Query(...), ejecutivo: Optional[str] = None):
         cur.execute(sql, params)
         rows = cur.fetchall() or []
 
+        # LOG TEMPORAL: verificar que NULL viene como None desde MySQL
+        if rows:
+            print(f"[DEBUG /api/kpis] Primera fila cruda del cursor: {rows[0]}")
+
         data = []
         for r in rows:
             data.append(
