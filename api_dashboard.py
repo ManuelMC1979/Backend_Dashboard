@@ -34,21 +34,33 @@ def get_db_conn():
 
 
 # --- AUTH LOGIN ENDPOINT REAL ---
+
 import secrets
 from datetime import datetime, timedelta
-from security_context import crypt_context
+import bcrypt
 
 # Global token store: token -> {user_id, expires_at}
 TOKENS: Dict[str, Dict[str, Any]] = {}
 
 ROLE_MAP = {1: "ejecutivo", 2: "supervisor", 3: "jefatura"}
 
+
+def verify_password(plain: str, password_hash: str) -> bool:
+    if not plain or not password_hash:
+        return False
+    if len(plain.encode("utf-8")) > 72:
+        return False
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), password_hash.encode("utf-8"))
+    except Exception:
+        return False
+
 @router.post("/auth/login")
 def login(payload: Dict[str, Any]):
     email = (payload.get("email") or "").strip().lower()
     password = payload.get("password")
     if not email or not password:
-        print(f"[auth] login fail: {email}")
+        print(f"[auth] login fail reason=not_found/email")
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
     conn = get_db_conn()
@@ -61,19 +73,19 @@ def login(payload: Dict[str, Any]):
         )
         user = cur.fetchone()
         if not user or not user.get("password_hash"):
-            print(f"[auth] login fail: {email}")
+            print(f"[auth] login fail reason=not_found/email")
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
         if not user["password_hash"].startswith("$2b$"):
-            print(f"[auth] login fail: {email} (hash no bcrypt)")
+            print(f"[auth] login fail reason=bad_password")
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
-        if not crypt_context.verify(password, user["password_hash"]):
-            print(f"[auth] login fail: {email}")
+        if not verify_password(password, user["password_hash"]):
+            print(f"[auth] login fail reason=bad_password")
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
         if not user["is_active"]:
-            print(f"[auth] login fail: {email} (inactivo)")
+            print(f"[auth] login fail reason=inactive user_id={user['id']}")
             raise HTTPException(status_code=403, detail="Usuario inactivo")
 
         role_str = ROLE_MAP.get(user["role_id"], "ejecutivo")
@@ -81,7 +93,7 @@ def login(payload: Dict[str, Any]):
         expires_at = datetime.utcnow() + timedelta(hours=12)
         TOKENS[token] = {"user_id": user["id"], "expires_at": expires_at}
 
-        print(f"[auth] login ok: {email}")
+        print(f"[auth] login ok user_id={user['id']}")
         return {
             "token": token,
             "usuario": {
@@ -92,7 +104,7 @@ def login(payload: Dict[str, Any]):
             },
         }
     except Exception as e:
-        print(f"[auth] login fail: {email} (error: {e})")
+        print(f"[auth] login fail reason=exception error={e}")
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
     finally:
         try:
