@@ -5,3 +5,5 @@ pandas
 openpyxl
 mysql-connector-python
 httpx
+passlib[bcrypt]
+PyMySQL
