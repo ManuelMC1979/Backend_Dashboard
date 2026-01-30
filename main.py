@@ -8,6 +8,8 @@ from typing import Optional, Dict, List
 import pandas as pd
 import tempfile
 import os
+DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("DB_PASS") or ""
+print("[env] DB_PASSWORD_set=", bool(DB_PASSWORD))
 from datetime import datetime
 
 # Router de API (tu /api/kpis, etc.)

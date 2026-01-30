@@ -1,3 +1,6 @@
+import os
+DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("DB_PASS") or ""
+print("[env] DB_PASSWORD_set=", bool(DB_PASSWORD))
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional, List, Dict, Any
 from datetime import date

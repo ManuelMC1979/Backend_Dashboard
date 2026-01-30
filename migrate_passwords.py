@@ -1,5 +1,9 @@
+
 import os
 import pymysql
+
+DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("DB_PASS") or ""
+print("[env] DB_PASSWORD_set=", bool(DB_PASSWORD))
 import bcrypt
 
 # ---- Pega aquí tu lista (copiada desde auth.js) ----
@@ -32,17 +36,20 @@ def hash_password(pw: str) -> str:
 
 def main():
     # Ideal: variables de entorno del contenedor (EasyPanel)
+
     DB_HOST = os.getenv("DB_HOST", "kpi-dashboard_kpi-db")
     DB_PORT = int(os.getenv("DB_PORT", "3306"))
     DB_USER = os.getenv("DB_USER", "kpi_user")
-    DB_PASS = os.getenv("DB_PASS", "")
     DB_NAME = os.getenv("DB_NAME", "kpi_dashboard")
+
+    if not DB_PASSWORD:
+        raise SystemExit("Falta DB_PASSWORD/DB_PASS (password de la DB). Define DB_PASSWORD o DB_PASS en variables de entorno.")
 
     conn = pymysql.connect(
         host=DB_HOST,
         port=DB_PORT,
         user=DB_USER,
-        password=DB_PASS,
+        password=DB_PASSWORD,
         database=DB_NAME,
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
