@@ -29,17 +29,78 @@ def get_db_conn():
         raise HTTPException(status_code=500, detail=f"Error conexión BD: {e}")
 
 
+
+# --- AUTH LOGIN ENDPOINT REAL ---
+import secrets
+from datetime import datetime, timedelta
+from security_context import crypt_context
+
+# Global token store: token -> {user_id, expires_at}
+TOKENS: Dict[str, Dict[str, Any]] = {}
+
+ROLE_MAP = {1: "ejecutivo", 2: "supervisor", 3: "jefatura"}
+
 @router.post("/auth/login")
 def login(payload: Dict[str, Any]):
-    # DEMO hoy (no tocar)
-    email = payload.get("email")
+    email = (payload.get("email") or "").strip().lower()
     password = payload.get("password")
-    if email == "admin@demo.cl" and password == "1234":
+    if not email or not password:
+        print(f"[auth] login fail: {email}")
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+    conn = get_db_conn()
+    cur = None
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT id, nombre, correo, password_hash, is_active, role_id FROM users WHERE correo = %s",
+            (email,)
+        )
+        user = cur.fetchone()
+        if not user or not user.get("password_hash"):
+            print(f"[auth] login fail: {email}")
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+        if not user["password_hash"].startswith("$2b$"):
+            print(f"[auth] login fail: {email} (hash no bcrypt)")
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+        if not crypt_context.verify(password, user["password_hash"]):
+            print(f"[auth] login fail: {email}")
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+        if not user["is_active"]:
+            print(f"[auth] login fail: {email} (inactivo)")
+            raise HTTPException(status_code=403, detail="Usuario inactivo")
+
+        role_str = ROLE_MAP.get(user["role_id"], "ejecutivo")
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.utcnow() + timedelta(hours=12)
+        TOKENS[token] = {"user_id": user["id"], "expires_at": expires_at}
+
+        print(f"[auth] login ok: {email}")
         return {
-            "token": "dev-token",
-            "user": {"nombre": "Admin Demo", "email": email, "rol": "supervisor"},
+            "token": token,
+            "usuario": {
+                "id": user["id"],
+                "nombre": user["nombre"],
+                "correo": user["correo"],
+                "rol": role_str,
+            },
         }
-    return {"detail": "Credenciales inválidas"}
+    except Exception as e:
+        print(f"[auth] login fail: {email} (error: {e})")
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    finally:
+        try:
+            if cur:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @router.get("/kpis")
