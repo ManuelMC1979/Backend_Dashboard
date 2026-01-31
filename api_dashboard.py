@@ -42,7 +42,12 @@ import bcrypt
 # Global token store: token -> {user_id, expires_at}
 TOKENS: Dict[str, Dict[str, Any]] = {}
 
-ROLE_MAP = {1: "ejecutivo", 2: "supervisor", 3: "jefatura"}
+ROLE_MAP = {
+    1: "ejecutivo",
+    2: "supervisor",
+    3: "jefatura",
+    99: "admin"
+}
 
 
 def verify_password(plain: str, password_hash: str) -> bool:
@@ -88,7 +93,7 @@ def login(payload: Dict[str, Any]):
             print(f"[auth] login fail reason=inactive user_id={user['id']}")
             raise HTTPException(status_code=403, detail="Usuario inactivo")
 
-        role_str = ROLE_MAP.get(user["role_id"], "ejecutivo")
+        role_str = ROLE_MAP.get(int(user["role_id"]), "ejecutivo")
         token = secrets.token_urlsafe(32)
         expires_at = datetime.utcnow() + timedelta(hours=12)
         TOKENS[token] = {"user_id": user["id"], "expires_at": expires_at}
