@@ -632,6 +632,17 @@ body {
   padding: 12px 16px;
   color: #ffffff;
   font-size: 14px;
+  position: relative;
+  z-index: 1;
+  cursor: pointer;
+}
+.date-input::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  filter: invert(1);
+  opacity: 0.7;
+}
+.date-input::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
 }
 .date-input:focus { outline: none; border-color: #22c55e; }
 .submit-btn {
@@ -842,17 +853,23 @@ body {
     const checkbox = document.getElementById('omitir_' + name);
     const wrapper = document.getElementById('wrapper_' + name);
     const fileInput = wrapper.querySelector('input[type="file"]');
+    const label = wrapper.querySelector('.file-label');
     const infoDiv = document.getElementById('info_' + name);
 
     if (checkbox.checked) {
       wrapper.classList.add('disabled');
-      fileInput.removeAttribute('required');
-      wrapper.querySelector('.file-label').textContent = 'Omitido';
+      fileInput.disabled = true;
+      fileInput.value = '';
+      label.textContent = 'Omitido';
       wrapper.classList.remove('has-file');
       infoDiv.classList.remove('show');
+      delete filesCache[name];
+      console.log('[KPI] Omitido:', name);
     } else {
       wrapper.classList.remove('disabled');
-      wrapper.querySelector('.file-label').textContent = 'Seleccionar archivo...';
+      fileInput.disabled = false;
+      label.textContent = 'Seleccionar archivo...';
+      console.log('[KPI] Habilitado:', name);
     }
   }
 
@@ -862,11 +879,14 @@ body {
     const infoDiv = document.getElementById('info_' + kpiName);
     const detectedSpan = document.getElementById('detected_' + kpiName);
 
-    if (input.files.length > 0) {
+    console.log('[KPI] handleFileChange:', kpiName, 'files:', input.files.length);
+
+    if (input.files && input.files.length > 0) {
       const file = input.files[0];
+      console.log('[KPI] Archivo seleccionado:', kpiName, '->', file.name, '(', file.size, 'bytes)');
+      
       label.textContent = file.name;
       wrapper.classList.add('has-file');
-
       filesCache[kpiName] = file;
 
       const formData = new FormData();
@@ -884,9 +904,10 @@ body {
           infoDiv.classList.add('show');
         }
       } catch (error) {
-        console.error('Error detectando KPI:', error);
+        console.error('[KPI] Error detectando:', error);
       }
     } else {
+      console.log('[KPI] Sin archivo:', kpiName);
       label.textContent = 'Seleccionar archivo...';
       wrapper.classList.remove('has-file');
       infoDiv.classList.remove('show');
@@ -900,6 +921,26 @@ body {
     const formData = new FormData(e.target);
     const submitBtn = e.target.querySelector('.submit-btn');
     const status = document.getElementById('status');
+
+    // Logging: mostrar contenido de FormData antes de enviar
+    console.log('[KPI] === SUBMIT FormData ===');
+    for (const [key, value] of formData.entries()) {
+      if (value instanceof File) {
+        console.log('[KPI]', key, '->', value.name || '(vacío)', '(', value.size, 'bytes)');
+      } else {
+        console.log('[KPI]', key, '->', value);
+      }
+    }
+    console.log('[KPI] === FIN FormData ===');
+
+    // Validar fecha
+    const fechaRegistro = formData.get('fecha_registro');
+    if (!fechaRegistro) {
+      status.className = 'status error';
+      status.textContent = '✗ Debe seleccionar una fecha de registro';
+      status.style.display = 'block';
+      return;
+    }
 
     submitBtn.disabled = true;
     submitBtn.textContent = 'Procesando...';
@@ -959,6 +1000,19 @@ async def upload_files(
     authorization: str = Header(None),
 ):
     """Endpoint para recibir los 7 archivos KPI y procesarlos (SOLO ADMIN)"""
+    # Logging de campos recibidos
+    print(f"[upload] === RECIBIDO ===")
+    print(f"[upload] fecha_registro: {fecha_registro}")
+    print(f"[upload] tmo: {tmo.filename if tmo else 'None'}")
+    print(f"[upload] transf_epa: {transf_epa.filename if transf_epa else 'None'}")
+    print(f"[upload] tipificaciones: {tipificaciones.filename if tipificaciones else 'None'}")
+    print(f"[upload] sat_ep: {sat_ep.filename if sat_ep else 'None'}")
+    print(f"[upload] res_ep: {res_ep.filename if res_ep else 'None'}")
+    print(f"[upload] sat_snl: {sat_snl.filename if sat_snl else 'None'}")
+    print(f"[upload] res_snl: {res_snl.filename if res_snl else 'None'}")
+    print(f"[upload] omitir: tmo={omitir_tmo}, transf_epa={omitir_transf_epa}, tipif={omitir_tipificaciones}, sat_ep={omitir_sat_ep}, res_ep={omitir_res_ep}, sat_snl={omitir_sat_snl}, res_snl={omitir_res_snl}")
+    print(f"[upload] === FIN RECIBIDO ===")
+    
     # Validar token LOCAL (TOKENS dict)
     token = extract_bearer_token(authorization)
     admin_user = require_admin_local(token)
