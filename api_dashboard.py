@@ -1,7 +1,7 @@
 import os
 DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("DB_PASS") or ""
 print("[env] DB_PASSWORD_set=", bool(DB_PASSWORD))
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Header
 from typing import Optional, List, Dict, Any
 from datetime import date
 from decimal import Decimal
@@ -328,6 +328,116 @@ def get_historial():
         "epa": [10, 11, 12],
         "satSNL": [88, 89, 90],
     }
+
+
+@router.get("/meses-disponibles")
+def get_meses_disponibles(authorization: str = Header(None)):
+    """
+    Devuelve los meses con datos disponibles en la BD.
+    Ordenados cronológicamente (año, mes).
+    
+    Requiere: Authorization: Bearer <token>
+    
+    Respuesta:
+    {
+      "meses": [
+        { "mes": "OCTUBRE", "anio": 2025 },
+        { "mes": "NOVIEMBRE", "anio": 2025 },
+        ...
+      ]
+    }
+    """
+    # --- Validar token ---
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Token requerido")
+    
+    token = authorization.split(" ", 1)[1]
+    session = TOKENS.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Token inválido o expirado")
+    
+    from datetime import datetime as dt
+    if dt.utcnow() > session["expires_at"]:
+        del TOKENS[token]
+        raise HTTPException(status_code=401, detail="Token expirado")
+    # --- Fin validación token ---
+    
+    MES_ORDER = [
+        'ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO',
+        'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'
+    ]
+    
+    conn = get_db_conn()
+    cur = None
+    try:
+        cur = conn.cursor(dictionary=True)
+        
+        # Query para obtener meses y años distintos
+        # Intenta primero con columnas separadas (mes, anio)
+        cur.execute("""
+            SELECT DISTINCT UPPER(mes) as mes, anio 
+            FROM kpi_monthly
+            WHERE mes IS NOT NULL AND mes != '' AND anio IS NOT NULL
+        """)
+        rows = cur.fetchall() or []
+        
+        # Si no hay resultados con columna anio, intentar parsear del campo mes
+        if not rows:
+            cur.execute("""
+                SELECT DISTINCT mes
+                FROM kpi_monthly
+                WHERE mes IS NOT NULL AND mes != ''
+            """)
+            rows_raw = cur.fetchall() or []
+            
+            # Parsear formato "ENERO 2025"
+            for row in rows_raw:
+                mes_raw = (row.get("mes") or "").strip().upper()
+                if not mes_raw:
+                    continue
+                parts = mes_raw.split()
+                if len(parts) >= 2:
+                    mes_nombre = parts[0]
+                    try:
+                        anio = int(parts[1])
+                    except ValueError:
+                        anio = 2025
+                else:
+                    mes_nombre = parts[0]
+                    anio = 2025
+                rows.append({"mes": mes_nombre, "anio": anio})
+        
+        # Ordenar cronológicamente
+        def sort_key(x):
+            mes = (x.get("mes") or "").upper()
+            anio = x.get("anio") or 2025
+            try:
+                mes_idx = MES_ORDER.index(mes)
+            except ValueError:
+                mes_idx = 0
+            return (anio, mes_idx)
+        
+        meses_sorted = sorted(rows, key=sort_key)
+        
+        # Formato limpio para frontend
+        result = [{"mes": m["mes"], "anio": m["anio"]} for m in meses_sorted]
+        
+        print(f"[DEBUG /api/meses-disponibles] user_id={session['user_id']} meses={len(result)}")
+        return {"meses": result}
+        
+    except Error as e:
+        print(f"[ERROR /api/meses-disponibles] {e}")
+        raise HTTPException(status_code=500, detail=f"Error consultando meses: {e}")
+    finally:
+        try:
+            if cur:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @router.post("/auditoria")
