@@ -666,7 +666,7 @@ body {
   display: none;
 }
 .status.success { background-color: #064e3b; border-left: 3px solid #22c55e; color: #22c55e; }
-.status.error {{ background-color: #7f1d1d; border-left: 3px solid #ef4444; color: #fca5a5; }}
+.status.error { background-color: #7f1d1d; border-left: 3px solid #ef4444; color: #fca5a5; }
 </style>
 </head>
 <body>
@@ -807,7 +807,7 @@ body {
   // --- AUTH: Manejo de token opaco ---
   let authToken = null;
   
-  function initAuth() {{
+  function initAuth() {
     // 1. Leer token desde query param ?t=TOKEN
     const urlParams = new URLSearchParams(window.location.search);
     const tokenFromUrl = urlParams.get('t');
@@ -826,6 +826,7 @@ body {
     // Si llegamos aquí, el backend ya validó el token (server-side)
     // Solo mostramos el formulario
     document.getElementById('mainContent').style.display = 'block';
+    console.log('[KPI] Auth inicializado, token presente:', !!authToken);
   }
   
   function getAuthHeaders() {
@@ -843,7 +844,16 @@ body {
   }
   
   // Inicializar auth al cargar
-  document.addEventListener('DOMContentLoaded', initAuth);
+  document.addEventListener('DOMContentLoaded', function() {
+    initAuth();
+    // Fix para datepicker
+    const dateInput = document.querySelector('.date-input');
+    if (dateInput) {
+      dateInput.addEventListener('click', function() {
+        this.showPicker && this.showPicker();
+      });
+    }
+  });
   
   // --- FIN AUTH ---
 
