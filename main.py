@@ -91,7 +91,7 @@ async def require_admin_token(token: str) -> Dict[str, Any]:
     
     Criterios de admin (cualquiera):
     - user.rol == "admin"
-    - user.role_id == 99
+    - user.role_id == 99 o 1
     - user.is_admin == true
     
     Returns: dict con datos del usuario admin
@@ -106,7 +106,7 @@ async def require_admin_token(token: str) -> Dict[str, Any]:
     
     is_admin = (
         rol == "admin" or
-        role_id == 99 or
+        role_id in (99, 1) or
         is_admin_flag is True
     )
     
@@ -398,7 +398,7 @@ async def enviar_a_n8n(registros: list, fecha_registro: str, digitador: Optional
         # Normalizar digitador para el payload
         if digitador:
             ingresado_por = {
-                "email": digitador.get("email", "unknown"),
+                "email": digitador.get("email") or digitador.get("correo", "unknown"),
                 "nombre": digitador.get("nombre_mostrar") or digitador.get("nombre", "Desconocido"),
                 "rut": digitador.get("rut"),
                 "rol": digitador.get("rol", "admin"),
