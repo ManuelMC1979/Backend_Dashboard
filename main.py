@@ -793,8 +793,8 @@ body {
       const result = await response.json();
 
       if (response.ok && result.preview_url) {
-        // Pasar token a la preview via query param
-        window.location.href = result.preview_url + '?t=' + encodeURIComponent(authToken);
+        // Redirigir a preview (el session_id actúa como token temporal)
+        window.location.href = result.preview_url;
       } else {
         throw new Error(result.detail || 'Error al procesar archivos');
       }
@@ -878,7 +878,7 @@ async def upload_files(
             "registros": registros,
             "fecha_registro": fecha_registro,
             "kpis_omitidos": kpis_omitidos,
-            "digitador": admin_user,  # Guardar info del admin que subió
+            "ingresado_por": admin_user,  # Guardar info del admin que subió (email, nombre, etc.)
         }
 
         return JSONResponse(content={"status": "success", "preview_url": f"/preview/{session_id}"})
@@ -890,31 +890,20 @@ async def upload_files(
 
 
 @app.get("/preview/{session_id}", response_class=HTMLResponse)
-async def preview_data_view(session_id: str, t: Optional[str] = None):
-    """Vista previa de datos antes de insertar en BD (SOLO ADMIN)"""
-    # Validar que sea admin usando token de query param
-    if not t:
+async def preview_data_view(session_id: str):
+    """Vista previa de datos antes de insertar en BD.
+    
+    Nota: La autenticación se validó en /upload al crear la sesión.
+    El session_id actúa como token temporal de sesión.
+    """
+    if session_id not in preview_data:
         return HTMLResponse(content="""
         <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
-        <h1 style="color:#ef4444;">⛔ Acceso Denegado</h1>
-        <p>Token de autenticación requerido.</p>
-        <a href="https://www.gtrmanuelmonsalve.cl" style="color:#22c55e;">Volver al Dashboard</a>
+        <h1 style="color:#ef4444;">⛔ Sesión Expirada</h1>
+        <p>La sesión no existe o ha expirado. Vuelva a cargar los archivos.</p>
+        <a href="/" style="color:#22c55e;">Volver al formulario</a>
         </body></html>
-        """, status_code=401)
-    
-    try:
-        require_admin_jwt(f"Bearer {t}")
-    except HTTPException as e:
-        return HTMLResponse(content=f"""
-        <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
-        <h1 style="color:#ef4444;">⛔ Acceso Denegado</h1>
-        <p>{e.detail}</p>
-        <a href="https://www.gtrmanuelmonsalve.cl" style="color:#22c55e;">Volver al Dashboard</a>
-        </body></html>
-        """, status_code=e.status_code)
-    
-    if session_id not in preview_data:
-        return "<h1>Sesión expirada</h1>"
+        """, status_code=404)
 
     data = preview_data[session_id]
     registros = data["registros"]
@@ -1063,18 +1052,7 @@ async def preview_data_view(session_id: str, t: Optional[str] = None):
   </div>
 
 <script>
-  // --- AUTH: Guardar token de URL en localStorage ---
-  (function() {{
-    const urlParams = new URLSearchParams(window.location.search);
-    const tokenFromUrl = urlParams.get('t');
-    if (tokenFromUrl) {{
-      localStorage.setItem('kpi_token', tokenFromUrl);
-      // Limpiar URL para no mostrar el token
-      window.history.replaceState({{}}, document.title, window.location.pathname);
-    }}
-  }})();
-  
-  // Obtener token del localStorage
+  // Obtener token del localStorage (guardado en la página principal)
   function getAuthToken() {{
     return localStorage.getItem('kpi_token');
   }}
@@ -1128,9 +1106,8 @@ async def preview_data_view(session_id: str, t: Optional[str] = None):
         status.style.display = 'block';
 
         setTimeout(() => {{
-          // Redirigir manteniendo el token en la URL
-          const token = getAuthToken();
-          window.location.href = token ? `/?t=${{token}}` : '/';
+          // Redirigir al formulario principal (el token ya está en localStorage)
+          window.location.href = '/';
         }}, 2000);
       }} else {{
         throw new Error(result.detail || 'Error al procesar datos');
@@ -1159,11 +1136,11 @@ async def confirm_insertion(session_id: str, authorization: str = Header(None)):
         return JSONResponse(status_code=404, content={"status": "error", "detail": "Sesión no encontrada"})
 
     data = preview_data[session_id]
-    # Usar el digitador guardado en la sesión (o el actual si no existe)
-    digitador = data.get("digitador") or admin_user
+    # Usar el ingresado_por guardado en la sesión (o el usuario actual si no existe)
+    ingresado_por = data.get("ingresado_por") or admin_user
 
     try:
-        result = await enviar_a_n8n(data["registros"], data["fecha_registro"], digitador=digitador)
+        result = await enviar_a_n8n(data["registros"], data["fecha_registro"], digitador=ingresado_por)
 
         if result["success"]:
             del preview_data[session_id]
