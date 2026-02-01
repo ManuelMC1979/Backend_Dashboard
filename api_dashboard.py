@@ -346,6 +346,8 @@ def get_meses_disponibles(authorization: str = Header(None)):
         ...
       ]
     }
+    
+    v1.1 - Trigger redeploy
     """
     # --- Validar token ---
     if not authorization or not authorization.lower().startswith("bearer "):
