@@ -1256,7 +1256,7 @@ async def preview_data_view(
     </div>
 
     <div class="actions">
-      <button class="btn btn-back" onclick="window.history.back()">Volver y Modificar</button>
+      <button class="btn btn-back" onclick="volverAlFormulario()">Volver y Modificar</button>
       <button class="btn btn-confirm" onclick="confirmarInsercion()">Confirmar e Insertar</button>
     </div>
 
@@ -1267,6 +1267,16 @@ async def preview_data_view(
   // Obtener token del localStorage (guardado en la página principal)
   function getAuthToken() {{
     return localStorage.getItem('kpi_token');
+  }}
+
+  // Volver al formulario con token en query param
+  function volverAlFormulario() {{
+    const token = getAuthToken();
+    if (!token) {{
+      window.location.href = 'https://www.gtrmanuelmonsalve.cl';
+      return;
+    }}
+    window.location.href = '/?t=' + encodeURIComponent(token);
   }}
 
   // Obtener headers con autorización
