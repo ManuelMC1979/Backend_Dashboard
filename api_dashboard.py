@@ -127,6 +127,48 @@ def login(payload: Dict[str, Any]):
             pass
 
 
+# --- ENDPOINT PÚBLICO: Nombres de usuarios (cualquier rol autenticado) ---
+
+@router.get("/usuarios/nombres")
+def get_usuarios_nombres():
+    """
+    Devuelve nombre y nombre_mostrar de todos los usuarios activos.
+    Accesible para cualquier rol autenticado.
+    NO incluye datos sensibles (id, correo, password, role_id).
+    """
+    conn = get_db_conn()
+    cur = None
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT nombre, nombre_mostrar 
+            FROM users 
+            WHERE is_active = 1
+            ORDER BY nombre
+        """)
+        usuarios = cur.fetchall()
+        
+        result = []
+        for u in usuarios:
+            result.append({
+                "nombre": u["nombre"],
+                "nombre_mostrar": u.get("nombre_mostrar"),
+            })
+        
+        print(f"[api/usuarios/nombres] list ok count={len(result)}")
+        return result
+    finally:
+        try:
+            if cur:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 @router.get("/kpis")
 def get_kpis(meses: List[str] = Query(...), ejecutivo: Optional[str] = None):
     if not meses:
