@@ -32,6 +32,7 @@ class UserOutAdmin(BaseModel):
     updated_at: Optional[datetime] = None
 
 class UserCreateAdmin(BaseModel):
+    rut: str
     nombre: str
     nombre_mostrar: Optional[str] = None
     correo: Optional[str] = None
@@ -155,9 +156,10 @@ def create_user(data: UserCreateAdmin, authorization: str = Header(None)):
     try:
         cur = conn.cursor(dictionary=True)
         cur.execute("""
-            INSERT INTO users (nombre, nombre_mostrar, correo, password_hash, role_id, is_active, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+            INSERT INTO users (rut, nombre, nombre_mostrar, correo, password_hash, role_id, is_active, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
         """, (
+            data.rut.strip(),
             data.nombre.strip(),
             data.nombre_mostrar.strip() if data.nombre_mostrar else None,
             correo,
