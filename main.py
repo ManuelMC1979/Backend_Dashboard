@@ -1,22 +1,19 @@
 # main.py
 from __future__ import annotations
 
-from fastapi import FastAPI, File, UploadFile, Form, Header, HTTPException, Depends, status
+from fastapi import FastAPI, File, UploadFile, Form, Header, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Dict, List, Any
 import pandas as pd
 import tempfile
 import os
-from jose import jwt, JWTError
+import httpx
 
 # Variables de entorno
 DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("DB_PASS") or ""
-JWT_SECRET = os.getenv("JWT_SECRET")  # REQUERIDO en producción
-JWT_ALG = os.getenv("JWT_ALG", "HS256")
 
 print("[env] DB_PASSWORD_set=", bool(DB_PASSWORD))
-print("[env] JWT_SECRET_set=", bool(JWT_SECRET))
 from datetime import datetime
 
 # Router de API (tu /api/kpis, etc.)
@@ -47,96 +44,98 @@ app.include_router(api_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api/admin")
 
 
-# --- JWT AUTH HELPERS (SIN LOGIN - Solo validación de token externo) ---
+# --- TOKEN AUTH HELPERS (Token opaco - validación contra API principal) ---
+
+# URL del API principal para validar tokens
+MAIN_API_URL = os.getenv("MAIN_API_URL", "https://api.gtrmanuelmonsalve.cl")
+
+
+async def validate_token_with_main_api(token: str) -> Dict[str, Any]:
+    """
+    Valida un token opaco consultando al API principal.
+    NO decodifica JWT localmente - el token es opaco.
+    
+    Request: GET {MAIN_API_URL}/api/auth/me
+    Header: Authorization: Bearer <token>
+    
+    Returns: dict con datos del usuario si es válido
+    Raises: HTTPException 401 si el token es inválido
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{MAIN_API_URL}/api/auth/me",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+        
+        if response.status_code == 200:
+            return response.json()
+        
+        # Token inválido o expirado
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado"
+        )
+    
+    except httpx.RequestError as e:
+        # Error de conexión al API principal
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No se pudo validar el token: {str(e)}"
+        )
+
+
+async def require_admin_token(token: str) -> Dict[str, Any]:
+    """
+    Valida que el token sea de un usuario admin.
+    
+    Criterios de admin (cualquiera):
+    - user.rol == "admin"
+    - user.role_id == 99
+    - user.is_admin == true
+    
+    Returns: dict con datos del usuario admin
+    Raises: HTTPException 401/403
+    """
+    user = await validate_token_with_main_api(token)
+    
+    # Verificar si es admin por cualquiera de los criterios
+    rol = user.get("rol", "")
+    role_id = user.get("role_id")
+    is_admin_flag = user.get("is_admin", False)
+    
+    is_admin = (
+        rol == "admin" or
+        role_id == 99 or
+        is_admin_flag is True
+    )
+    
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso denegado - Solo administradores"
+        )
+    
+    return user
+
 
 def extract_bearer_token(authorization: str | None) -> str:
     """
-    Extrae el token del header Authorization.
-    Formato esperado: "Bearer <token>"
-    Lanza 401 si no es válido.
+    Extrae el token del header Authorization: Bearer <token>
     """
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No autenticado - Header Authorization requerido"
+            detail="Header Authorization requerido"
         )
     
     if not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Formato de token inválido. Use: Bearer <token>"
+            detail="Formato inválido. Use: Bearer <token>"
         )
     
     return authorization.split(" ", 1)[1]
-
-
-def decode_jwt_token(token: str) -> Dict[str, Any]:
-    """
-    Decodifica y valida un JWT.
-    Retorna payload dict o lanza 401/500.
-    """
-    if not JWT_SECRET:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error de configuración: JWT_SECRET no está definido en el servidor"
-        )
-    
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-        return payload
-    except JWTError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token inválido o expirado: {str(e)}"
-        )
-
-
-def get_current_user_jwt(authorization: str = Header(None)) -> Dict[str, Any]:
-    """
-    Extrae y valida el usuario desde el header Authorization: Bearer <token>.
-    Retorna dict con: email, rol, nombre_mostrar, rut, nombre, user_id
-    Lanza 401 si el token es inválido o no contiene email.
-    """
-    token = extract_bearer_token(authorization)
-    payload = decode_jwt_token(token)
-    
-    # Normalizar campos (algunos tokens usan "correo" en vez de "email")
-    email = payload.get("email") or payload.get("correo")
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido: no contiene email del usuario"
-        )
-    
-    return {
-        "email": email,
-        "rol": payload.get("rol", "ejecutivo"),
-        "nombre": payload.get("nombre"),
-        "nombre_mostrar": payload.get("nombre_mostrar"),
-        "rut": payload.get("rut"),
-        "user_id": payload.get("user_id") or payload.get("id"),
-    }
-
-
-def require_admin_jwt(user: Dict[str, Any] = Depends(get_current_user_jwt)) -> Dict[str, Any]:
-    """
-    Dependencia que valida que el usuario sea admin.
-    Acepta: rol == "admin" O role_id == 99 (compatibilidad con sistemas legacy)
-    Lanza 403 si no es admin.
-    """
-    rol = user.get("rol", "")
-    role_id = user.get("role_id") or user.get("user_id")  # Algunos sistemas usan role_id
-    
-    # Admin si rol es "admin" o role_id es 99 (compatibilidad legacy)
-    is_admin = (rol == "admin") or (role_id == 99)
-    
-    if not is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acceso denegado - Solo administradores pueden realizar esta acción"
-        )
-    
-    return user
 
 
 # --- FIN AUTH HELPERS ---
@@ -388,8 +387,6 @@ async def enviar_a_n8n(registros: list, fecha_registro: str, digitador: Optional
     Incluye información del digitador (admin que realizó la carga) como 'ingresado_por'.
     """
     try:
-        import httpx
-
         fecha_obj = datetime.strptime(fecha_registro, "%Y-%m-%d")
         anio = fecha_obj.year
         meses_esp = [
@@ -449,9 +446,100 @@ async def detectar_kpi_endpoint(archivo: UploadFile = File(...)):
 
 
 @app.get("/", response_class=HTMLResponse)
-def upload_form():
-    """Formulario HTML para subir archivos KPI con pre-lectura"""
-    return """
+async def upload_form(t: Optional[str] = None):
+    """Formulario HTML para subir archivos KPI con pre-lectura.
+    
+    Requiere token en query param: /?t=TOKEN
+    El token se valida contra el API principal.
+    """
+    # Verificar que existe token
+    if not t:
+        return HTMLResponse(content="""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Acceso Restringido - ACHS</title>
+<style>
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #0a1929;
+  color: #ffffff;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.error-card {
+  background-color: #1e293b;
+  border-radius: 8px;
+  padding: 48px;
+  text-align: center;
+  border-left: 4px solid #ef4444;
+}
+.error-card h1 { color: #ef4444; margin-bottom: 16px; }
+.error-card p { color: #94a3b8; margin-bottom: 24px; }
+.error-card a { color: #22c55e; text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="error-card">
+  <h1>⛔ Acceso Restringido</h1>
+  <p>Falta el token de autenticación.</p>
+  <a href="https://www.gtrmanuelmonsalve.cl">Volver al Dashboard</a>
+</div>
+</body>
+</html>
+        """, status_code=401)
+    
+    # Validar token con API principal
+    try:
+        admin_user = await require_admin_token(t)
+    except HTTPException as e:
+        error_msg = e.detail if hasattr(e, 'detail') else "Token inválido"
+        return HTMLResponse(content=f"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Acceso Denegado - ACHS</title>
+<style>
+body {{
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #0a1929;
+  color: #ffffff;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}}
+.error-card {{
+  background-color: #1e293b;
+  border-radius: 8px;
+  padding: 48px;
+  text-align: center;
+  border-left: 4px solid #ef4444;
+}}
+.error-card h1 {{ color: #ef4444; margin-bottom: 16px; }}
+.error-card p {{ color: #94a3b8; margin-bottom: 24px; }}
+.error-card a {{ color: #22c55e; text-decoration: underline; }}
+</style>
+</head>
+<body>
+<div class="error-card">
+  <h1>⛔ Acceso Denegado</h1>
+  <p>{error_msg}</p>
+  <a href="https://www.gtrmanuelmonsalve.cl">Volver al Dashboard</a>
+</div>
+</body>
+</html>
+        """, status_code=e.status_code)
+    
+    # Token válido y es admin - guardar token para el JS
+    # El JS lo usará en los headers de /upload y /confirm
+    return f"""
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -562,21 +650,12 @@ body {
   display: none;
 }
 .status.success { background-color: #064e3b; border-left: 3px solid #22c55e; color: #22c55e; }
-.status.error { background-color: #7f1d1d; border-left: 3px solid #ef4444; color: #fca5a5; }
+.status.error {{ background-color: #7f1d1d; border-left: 3px solid #ef4444; color: #fca5a5; }}
 </style>
 </head>
 <body>
-  <!-- Pantalla de acceso denegado -->
-  <div id="accessDenied" class="container" style="display:none; text-align:center; padding-top:100px;">
-    <div class="form-card">
-      <h2 style="color:#ef4444; margin-bottom:16px;">⛔ Acceso Restringido</h2>
-      <p id="accessDeniedMsg" style="color:#94a3b8; margin-bottom:24px;"></p>
-      <a href="https://www.gtrmanuelmonsalve.cl" style="color:#22c55e; text-decoration:underline;">Volver al Dashboard</a>
-    </div>
-  </div>
-
-  <!-- Contenido principal (solo visible para admin) -->
-  <div id="mainContent" class="container" style="display:none;">
+  <!-- Contenido principal (ya validado server-side como admin) -->
+  <div id="mainContent" class="container">
     <div class="header">
       <h1>Carga de Archivos KPI</h1>
       <p>Panel de Control Operacional ACHS</p>
@@ -709,67 +788,43 @@ body {
   </div>
 
 <script>
-  // --- AUTH: Manejo de token JWT ---
+  // --- AUTH: Manejo de token opaco ---
   let authToken = null;
   
-  function initAuth() {
+  function initAuth() {{
     // 1. Leer token desde query param ?t=TOKEN
     const urlParams = new URLSearchParams(window.location.search);
     const tokenFromUrl = urlParams.get('t');
     
-    if (tokenFromUrl) {
-      // Guardar en localStorage y limpiar URL
+    if (tokenFromUrl) {{
+      // Guardar en localStorage
       localStorage.setItem('kpi_token', tokenFromUrl);
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
+      authToken = tokenFromUrl;
+      // Limpiar URL para no mostrar el token
+      window.history.replaceState({{}}, document.title, window.location.pathname);
+    }} else {{
+      // Obtener de localStorage si existe
+      authToken = localStorage.getItem('kpi_token');
+    }}
     
-    // 2. Obtener token de localStorage
-    authToken = localStorage.getItem('kpi_token');
-    
-    // 3. Validar acceso
-    checkAuth();
-  }
+    // Si llegamos aquí, el backend ya validó el token (server-side)
+    // Solo mostramos el formulario
+    document.getElementById('mainContent').style.display = 'block';
+  }}
   
-  function checkAuth() {
-    if (!authToken) {
-      showAccessDenied('Acceso restringido. Vuelva al dashboard e inicie sesión.');
-      return;
-    }
-    
-    // Decodificar JWT para verificar rol (sin validar firma, eso lo hace el backend)
-    try {
-      const payload = JSON.parse(atob(authToken.split('.')[1]));
-      if (payload.rol !== 'admin') {
-        showAccessDenied('No autorizado. Solo administradores pueden acceder.');
-        return;
-      }
-      // Admin OK - mostrar formulario
-      document.getElementById('mainContent').style.display = 'block';
-      document.getElementById('accessDenied').style.display = 'none';
-    } catch (e) {
-      console.error('Error decodificando token:', e);
-      showAccessDenied('Token inválido. Vuelva al dashboard e inicie sesión.');
-    }
-  }
+  function getAuthHeaders() {{
+    return authToken ? {{ 'Authorization': 'Bearer ' + authToken }} : {{}};
+  }}
   
-  function showAccessDenied(message) {
-    document.getElementById('mainContent').style.display = 'none';
-    document.getElementById('accessDenied').style.display = 'block';
-    document.getElementById('accessDeniedMsg').textContent = message;
-  }
-  
-  function getAuthHeaders() {
-    return authToken ? { 'Authorization': 'Bearer ' + authToken } : {};
-  }
-  
-  function handleAuthError(response) {
-    if (response.status === 401 || response.status === 403) {
+  function handleAuthError(response) {{
+    if (response.status === 401 || response.status === 403) {{
       localStorage.removeItem('kpi_token');
-      showAccessDenied('Sesión expirada o no autorizado. Vuelva al dashboard.');
+      alert('Sesión expirada o sin permisos. Será redirigido al dashboard.');
+      window.location.href = 'https://www.gtrmanuelmonsalve.cl';
       return true;
-    }
+    }}
     return false;
-  }
+  }}
   
   // Inicializar auth al cargar
   document.addEventListener('DOMContentLoaded', initAuth);
@@ -856,20 +911,20 @@ body {
 
       const result = await response.json();
 
-      if (response.ok && result.preview_url) {
-        // Redirigir a preview (el session_id actúa como token temporal)
-        window.location.href = result.preview_url;
-      } else {
+      if (response.ok && result.preview_url) {{
+        // Redirigir a preview con token en query param
+        window.location.href = result.preview_url + '?t=' + encodeURIComponent(authToken);
+      }} else {{
         throw new Error(result.detail || 'Error al procesar archivos');
-      }
-    } catch (error) {
+      }}
+    }} catch (error) {{
       status.className = 'status error';
       status.textContent = '✗ ' + error.message;
       status.style.display = 'block';
       submitBtn.disabled = false;
       submitBtn.textContent = 'Procesar Archivos';
-    }
-  });
+    }}
+  }});
 </script>
 </body>
 </html>
@@ -896,9 +951,13 @@ async def upload_files(
     omitir_res_ep: Optional[str] = Form(None),
     omitir_sat_snl: Optional[str] = Form(None),
     omitir_res_snl: Optional[str] = Form(None),
-    admin_user: Dict[str, Any] = Depends(require_admin_jwt),  # Auth via Depends
+    authorization: str = Header(None),
 ):
     """Endpoint para recibir los 7 archivos KPI y procesarlos (SOLO ADMIN)"""
+    # Validar token opaco via API principal
+    token = extract_bearer_token(authorization)
+    admin_user = await require_admin_token(token)
+    
     try:
         kpis_omitidos: List[str] = []
         if omitir_tmo == "on":
@@ -953,9 +1012,33 @@ async def upload_files(
 @app.get("/preview/{session_id}", response_class=HTMLResponse)
 async def preview_data_view(
     session_id: str,
-    admin_user: Dict[str, Any] = Depends(require_admin_jwt),  # Auth via Depends
+    t: Optional[str] = None,
 ):
-    """Vista previa de datos antes de insertar en BD (SOLO ADMIN)."""
+    """Vista previa de datos antes de insertar en BD (SOLO ADMIN).
+    
+    Requiere token en query param: /preview/{id}?t=TOKEN
+    """
+    # Validar token
+    if not t:
+        return HTMLResponse(content="""
+        <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
+        <h1 style="color:#ef4444;">⛔ Acceso Denegado</h1>
+        <p>Token de autenticación requerido.</p>
+        <a href="https://www.gtrmanuelmonsalve.cl" style="color:#22c55e;">Volver al Dashboard</a>
+        </body></html>
+        """, status_code=401)
+    
+    try:
+        await require_admin_token(t)
+    except HTTPException as e:
+        return HTMLResponse(content=f"""
+        <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
+        <h1 style="color:#ef4444;">⛔ Acceso Denegado</h1>
+        <p>{e.detail}</p>
+        <a href="https://www.gtrmanuelmonsalve.cl" style="color:#22c55e;">Volver al Dashboard</a>
+        </body></html>
+        """, status_code=e.status_code)
+    
     if session_id not in preview_data:
         return HTMLResponse(content="""
         <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
@@ -1189,9 +1272,13 @@ async def preview_data_view(
 @app.post("/confirm/{session_id}")
 async def confirm_insertion(
     session_id: str,
-    admin_user: Dict[str, Any] = Depends(require_admin_jwt),  # Auth via Depends
+    authorization: str = Header(None),
 ):
     """Confirmar e insertar datos vía n8n (SOLO ADMIN)"""
+    # Validar token opaco via API principal
+    token = extract_bearer_token(authorization)
+    admin_user = await require_admin_token(token)
+    
     if session_id not in preview_data:
         return JSONResponse(status_code=404, content={"status": "error", "detail": "Sesión no encontrada"})
 
