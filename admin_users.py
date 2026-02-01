@@ -22,6 +22,7 @@ router = APIRouter()
 
 class UserOutAdmin(BaseModel):
     id: int
+    rut: Optional[str] = None
     nombre: str
     nombre_mostrar: Optional[str] = None
     correo: Optional[str] = None
@@ -113,7 +114,7 @@ def list_users(authorization: str = Header(None)):
     try:
         cur = conn.cursor(dictionary=True)
         cur.execute("""
-            SELECT id, nombre, nombre_mostrar, correo, role_id, is_active, created_at, updated_at
+            SELECT id, rut, nombre, nombre_mostrar, correo, role_id, is_active, created_at, updated_at
             FROM users
             ORDER BY id
         """)
@@ -123,6 +124,7 @@ def list_users(authorization: str = Header(None)):
         for u in users:
             result.append({
                 "id": u["id"],
+                "rut": u.get("rut"),
                 "nombre": u["nombre"],
                 "nombre_mostrar": u.get("nombre_mostrar"),
                 "correo": u.get("correo"),
@@ -172,7 +174,7 @@ def create_user(data: UserCreateAdmin, authorization: str = Header(None)):
         
         # Obtener usuario creado
         cur.execute("""
-            SELECT id, nombre, nombre_mostrar, correo, role_id, is_active, created_at, updated_at
+            SELECT id, rut, nombre, nombre_mostrar, correo, role_id, is_active, created_at, updated_at
             FROM users WHERE id = %s
         """, (user_id,))
         u = cur.fetchone()
@@ -180,6 +182,7 @@ def create_user(data: UserCreateAdmin, authorization: str = Header(None)):
         print(f"[admin/users] create ok id={user_id}")
         return {
             "id": u["id"],
+            "rut": u.get("rut"),
             "nombre": u["nombre"],
             "nombre_mostrar": u.get("nombre_mostrar"),
             "correo": u.get("correo"),
@@ -252,7 +255,7 @@ def update_user(user_id: int, data: UserUpdateAdmin, authorization: str = Header
         
         # Obtener usuario actualizado
         cur.execute("""
-            SELECT id, nombre, nombre_mostrar, correo, role_id, is_active, created_at, updated_at
+            SELECT id, rut, nombre, nombre_mostrar, correo, role_id, is_active, created_at, updated_at
             FROM users WHERE id = %s
         """, (user_id,))
         u = cur.fetchone()
@@ -260,6 +263,7 @@ def update_user(user_id: int, data: UserUpdateAdmin, authorization: str = Header
         print(f"[admin/users] update ok id={user_id}")
         return {
             "id": u["id"],
+            "rut": u.get("rut"),
             "nombre": u["nombre"],
             "nombre_mostrar": u.get("nombre_mostrar"),
             "correo": u.get("correo"),
@@ -295,7 +299,7 @@ def disable_user(user_id: int, authorization: str = Header(None)):
         
         # Obtener usuario desactivado
         cur.execute("""
-            SELECT id, nombre, nombre_mostrar, correo, role_id, is_active, created_at, updated_at
+            SELECT id, rut, nombre, nombre_mostrar, correo, role_id, is_active, created_at, updated_at
             FROM users WHERE id = %s
         """, (user_id,))
         u = cur.fetchone()
@@ -303,6 +307,7 @@ def disable_user(user_id: int, authorization: str = Header(None)):
         print(f"[admin/users] disable ok id={user_id}")
         return {
             "id": u["id"],
+            "rut": u.get("rut"),
             "nombre": u["nombre"],
             "nombre_mostrar": u.get("nombre_mostrar"),
             "correo": u.get("correo"),
