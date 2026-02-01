@@ -171,6 +171,44 @@ def get_usuarios_nombres():
 
 @router.get("/kpis")
 def get_kpis(meses: List[str] = Query(...), ejecutivo: Optional[str] = None):
+    """
+    ============================================================
+    ANÁLISIS DE FILTRADO - GET /api/kpis
+    ============================================================
+    ESTADO ACTUAL (sin modificar lógica):
+    
+    a) FILTROS APLICADOS:
+       - meses: OBLIGATORIO (query param). Filtra por mes IN (...)
+       - ejecutivo: OPCIONAL (query param). Si se envía, filtra por ejecutivo = %s
+    
+    b) ROL DEL USUARIO AUTENTICADO:
+       - NO SE USA. Este endpoint NO valida token ni rol.
+       - Cualquier request (autenticado o no) puede consultar TODOS los KPIs.
+       - NO hay restricción por rol (admin, supervisor, ejecutivo).
+    
+    c) PARÁMETRO EJECUTIVO:
+       - El frontend PUEDE enviar ?ejecutivo=NOMBRE para filtrar.
+       - Si NO se envía, retorna TODOS los ejecutivos de los meses solicitados.
+       - El backend NO fuerza filtro por usuario autenticado.
+    
+    d) IDENTIFICADOR DE USUARIO:
+       - NO SE EXTRAE del token. No hay header Authorization requerido.
+    
+    CONCLUSIÓN:
+       - HOY: Endpoint PÚBLICO, sin restricción por rol.
+       - FALTA: Validar token, extraer rol, y si rol=ejecutivo filtrar
+         automáticamente por su propio nombre (ignorando param ejecutivo).
+    ============================================================
+    """
+    # --- DEBUG LOG: Análisis de filtrado actual ---
+    print(f"[DEBUG /api/kpis] === ANÁLISIS DE FILTRADO ===")
+    print(f"[DEBUG /api/kpis] Endpoint NO requiere autenticación (sin header Authorization)")
+    print(f"[DEBUG /api/kpis] Parámetros recibidos: meses={meses}, ejecutivo={ejecutivo}")
+    print(f"[DEBUG /api/kpis] Filtro por rol: NO APLICADO (endpoint público)")
+    print(f"[DEBUG /api/kpis] Si ejecutivo=None -> retorna TODOS los ejecutivos")
+    print(f"[DEBUG /api/kpis] === FIN ANÁLISIS ===")
+    # --- FIN DEBUG LOG ---
+    
     if not meses:
         return {"data": []}
 
@@ -196,6 +234,9 @@ def get_kpis(meses: List[str] = Query(...), ejecutivo: Optional[str] = None):
     if ejecutivo:
         sql += " AND ejecutivo = %s"
         params.append(ejecutivo)
+        print(f"[DEBUG /api/kpis] Filtro ejecutivo APLICADO: {ejecutivo}")
+    else:
+        print(f"[DEBUG /api/kpis] Filtro ejecutivo NO APLICADO: retornando TODOS")
 
     sql += " ORDER BY mes, ejecutivo"
 
@@ -244,6 +285,41 @@ def get_kpis(meses: List[str] = Query(...), ejecutivo: Optional[str] = None):
 
 @router.get("/kpis/historial")
 def get_historial():
+    """
+    ============================================================
+    ANÁLISIS DE FILTRADO - GET /api/kpis/historial
+    ============================================================
+    ESTADO ACTUAL (sin modificar lógica):
+    
+    a) FILTROS APLICADOS:
+       - NINGUNO. Retorna datos HARDCODEADOS de demo.
+       - No consulta la BD.
+    
+    b) ROL DEL USUARIO AUTENTICADO:
+       - NO SE USA. Endpoint sin autenticación.
+       - Cualquier request puede acceder.
+    
+    c) PARÁMETRO EJECUTIVO:
+       - NO ACEPTA parámetros.
+       - Siempre retorna los mismos datos fijos.
+    
+    d) IDENTIFICADOR DE USUARIO:
+       - NO SE EXTRAE. Sin validación de token.
+    
+    CONCLUSIÓN:
+       - HOY: Endpoint DEMO/PÚBLICO con datos estáticos.
+       - FALTA: Implementar query real a BD, validar token,
+         y filtrar por ejecutivo si rol=ejecutivo.
+    ============================================================
+    """
+    # --- DEBUG LOG: Análisis de filtrado actual ---
+    print(f"[DEBUG /api/kpis/historial] === ANÁLISIS DE FILTRADO ===")
+    print(f"[DEBUG /api/kpis/historial] Endpoint NO requiere autenticación")
+    print(f"[DEBUG /api/kpis/historial] Retorna datos HARDCODEADOS (demo)")
+    print(f"[DEBUG /api/kpis/historial] NO consulta BD, NO filtra por rol ni usuario")
+    print(f"[DEBUG /api/kpis/historial] === FIN ANÁLISIS ===")
+    # --- FIN DEBUG LOG ---
+    
     # DEMO hoy (presentación)
     return {
         "resEP": [80, 82, 85],
