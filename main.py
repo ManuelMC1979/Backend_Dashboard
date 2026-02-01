@@ -537,9 +537,8 @@ body {{
 </html>
         """, status_code=e.status_code)
     
-    # Token válido y es admin - guardar token para el JS
-    # El JS lo usará en los headers de /upload y /confirm
-    return f"""
+    # Token válido y es admin - mostrar formulario
+    return """
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -796,35 +795,35 @@ body {
     const urlParams = new URLSearchParams(window.location.search);
     const tokenFromUrl = urlParams.get('t');
     
-    if (tokenFromUrl) {{
+    if (tokenFromUrl) {
       // Guardar en localStorage
       localStorage.setItem('kpi_token', tokenFromUrl);
       authToken = tokenFromUrl;
       // Limpiar URL para no mostrar el token
-      window.history.replaceState({{}}, document.title, window.location.pathname);
-    }} else {{
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else {
       // Obtener de localStorage si existe
       authToken = localStorage.getItem('kpi_token');
-    }}
+    }
     
     // Si llegamos aquí, el backend ya validó el token (server-side)
     // Solo mostramos el formulario
     document.getElementById('mainContent').style.display = 'block';
-  }}
+  }
   
-  function getAuthHeaders() {{
-    return authToken ? {{ 'Authorization': 'Bearer ' + authToken }} : {{}};
-  }}
+  function getAuthHeaders() {
+    return authToken ? { 'Authorization': 'Bearer ' + authToken } : {};
+  }
   
-  function handleAuthError(response) {{
-    if (response.status === 401 || response.status === 403) {{
+  function handleAuthError(response) {
+    if (response.status === 401 || response.status === 403) {
       localStorage.removeItem('kpi_token');
       alert('Sesión expirada o sin permisos. Será redirigido al dashboard.');
       window.location.href = 'https://www.gtrmanuelmonsalve.cl';
       return true;
-    }}
+    }
     return false;
-  }}
+  }
   
   // Inicializar auth al cargar
   document.addEventListener('DOMContentLoaded', initAuth);
@@ -911,20 +910,20 @@ body {
 
       const result = await response.json();
 
-      if (response.ok && result.preview_url) {{
+      if (response.ok && result.preview_url) {
         // Redirigir a preview con token en query param
         window.location.href = result.preview_url + '?t=' + encodeURIComponent(authToken);
-      }} else {{
+      } else {
         throw new Error(result.detail || 'Error al procesar archivos');
-      }}
-    }} catch (error) {{
+      }
+    } catch (error) {
       status.className = 'status error';
       status.textContent = '✗ ' + error.message;
       status.style.display = 'block';
       submitBtn.disabled = false;
       submitBtn.textContent = 'Procesar Archivos';
-    }}
-  }});
+    }
+  });
 </script>
 </body>
 </html>
