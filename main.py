@@ -1,15 +1,18 @@
 # main.py
 from __future__ import annotations
 
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 import pandas as pd
 import tempfile
 import os
+from jose import jwt, JWTError
 DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("DB_PASS") or ""
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-in-prod")
 print("[env] DB_PASSWORD_set=", bool(DB_PASSWORD))
+print("[env] JWT_SECRET_set=", bool(JWT_SECRET and JWT_SECRET != "dev-secret-change-in-prod"))
 from datetime import datetime
 
 # Router de API (tu /api/kpis, etc.)
@@ -38,6 +41,53 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api/admin")
+
+
+# --- JWT AUTH HELPERS (SIN LOGIN - Solo validación de token externo) ---
+
+def decode_jwt_token(token: str) -> Dict[str, Any]:
+    """Decodifica y valida un JWT. Retorna claims o lanza excepción."""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        return payload
+    except JWTError as e:
+        raise HTTPException(status_code=401, detail=f"Token inválido: {str(e)}")
+
+
+def get_current_user_jwt(authorization: str = Header(None)) -> Dict[str, Any]:
+    """
+    Extrae y valida el usuario desde el header Authorization: Bearer <token>.
+    Retorna dict con: email, rol, nombre_mostrar, rut, nombre
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="No autenticado - Token requerido")
+    
+    if not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Formato de token inválido. Use: Bearer <token>")
+    
+    token = authorization.split(" ", 1)[1]
+    payload = decode_jwt_token(token)
+    
+    # Extraer claims estándar
+    return {
+        "email": payload.get("email") or payload.get("correo"),
+        "rol": payload.get("rol", "ejecutivo"),
+        "nombre": payload.get("nombre"),
+        "nombre_mostrar": payload.get("nombre_mostrar"),
+        "rut": payload.get("rut"),
+        "user_id": payload.get("user_id") or payload.get("id"),
+    }
+
+
+def require_admin_jwt(authorization: str = Header(None)) -> Dict[str, Any]:
+    """Valida que el usuario sea admin. Retorna user dict o lanza 403."""
+    user = get_current_user_jwt(authorization)
+    if user.get("rol") != "admin":
+        raise HTTPException(status_code=403, detail="Acceso denegado - Solo administradores")
+    return user
+
+
+# --- FIN AUTH HELPERS ---
 
 
 def normalizar_valor(valor) -> Optional[float]:
@@ -280,9 +330,10 @@ def unificar_datos_kpi(archivos_data: Dict[str, bytes], kpis_omitidos: List[str]
     return registros
 
 
-async def enviar_a_n8n(registros: list, fecha_registro: str):
+async def enviar_a_n8n(registros: list, fecha_registro: str, digitador: Optional[Dict[str, Any]] = None):
     """
     Envía los registros al webhook de n8n para procesamiento.
+    Incluye información del digitador (admin que realizó la carga).
     """
     try:
         import httpx
@@ -300,6 +351,7 @@ async def enviar_a_n8n(registros: list, fecha_registro: str):
             "fecha_registro": fecha_registro,
             "anio": anio,
             "mes": mes,
+            "digitador": digitador or {"email": "sistema", "nombre": "Sistema", "rol": "system"},
         }
 
         n8n_webhook_url = "https://kpi-dashboard-n8n.f7jaui.easypanel.host/webhook/kpi-upload"
@@ -450,7 +502,17 @@ body {
 </style>
 </head>
 <body>
-  <div class="container">
+  <!-- Pantalla de acceso denegado -->
+  <div id="accessDenied" class="container" style="display:none; text-align:center; padding-top:100px;">
+    <div class="form-card">
+      <h2 style="color:#ef4444; margin-bottom:16px;">⛔ Acceso Restringido</h2>
+      <p id="accessDeniedMsg" style="color:#94a3b8; margin-bottom:24px;"></p>
+      <a href="https://www.gtrmanuelmonsalve.cl" style="color:#22c55e; text-decoration:underline;">Volver al Dashboard</a>
+    </div>
+  </div>
+
+  <!-- Contenido principal (solo visible para admin) -->
+  <div id="mainContent" class="container" style="display:none;">
     <div class="header">
       <h1>Carga de Archivos KPI</h1>
       <p>Panel de Control Operacional ACHS</p>
@@ -583,6 +645,73 @@ body {
   </div>
 
 <script>
+  // --- AUTH: Manejo de token JWT ---
+  let authToken = null;
+  
+  function initAuth() {
+    // 1. Leer token desde query param ?t=TOKEN
+    const urlParams = new URLSearchParams(window.location.search);
+    const tokenFromUrl = urlParams.get('t');
+    
+    if (tokenFromUrl) {
+      // Guardar en localStorage y limpiar URL
+      localStorage.setItem('kpi_token', tokenFromUrl);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    
+    // 2. Obtener token de localStorage
+    authToken = localStorage.getItem('kpi_token');
+    
+    // 3. Validar acceso
+    checkAuth();
+  }
+  
+  function checkAuth() {
+    if (!authToken) {
+      showAccessDenied('Acceso restringido. Vuelva al dashboard e inicie sesión.');
+      return;
+    }
+    
+    // Decodificar JWT para verificar rol (sin validar firma, eso lo hace el backend)
+    try {
+      const payload = JSON.parse(atob(authToken.split('.')[1]));
+      if (payload.rol !== 'admin') {
+        showAccessDenied('No autorizado. Solo administradores pueden acceder.');
+        return;
+      }
+      // Admin OK - mostrar formulario
+      document.getElementById('mainContent').style.display = 'block';
+      document.getElementById('accessDenied').style.display = 'none';
+    } catch (e) {
+      console.error('Error decodificando token:', e);
+      showAccessDenied('Token inválido. Vuelva al dashboard e inicie sesión.');
+    }
+  }
+  
+  function showAccessDenied(message) {
+    document.getElementById('mainContent').style.display = 'none';
+    document.getElementById('accessDenied').style.display = 'block';
+    document.getElementById('accessDeniedMsg').textContent = message;
+  }
+  
+  function getAuthHeaders() {
+    return authToken ? { 'Authorization': 'Bearer ' + authToken } : {};
+  }
+  
+  function handleAuthError(response) {
+    if (response.status === 401 || response.status === 403) {
+      localStorage.removeItem('kpi_token');
+      showAccessDenied('Sesión expirada o no autorizado. Vuelva al dashboard.');
+      return true;
+    }
+    return false;
+  }
+  
+  // Inicializar auth al cargar
+  document.addEventListener('DOMContentLoaded', initAuth);
+  
+  // --- FIN AUTH ---
+
   const filesCache = {};
 
   function toggleFileInput(name) {
@@ -655,13 +784,17 @@ body {
     try {
       const response = await fetch('/upload', {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: formData
       });
+
+      if (handleAuthError(response)) return;
 
       const result = await response.json();
 
       if (response.ok && result.preview_url) {
-        window.location.href = result.preview_url;
+        // Pasar token a la preview via query param
+        window.location.href = result.preview_url + '?t=' + encodeURIComponent(authToken);
       } else {
         throw new Error(result.detail || 'Error al procesar archivos');
       }
@@ -699,8 +832,12 @@ async def upload_files(
     omitir_res_ep: Optional[str] = Form(None),
     omitir_sat_snl: Optional[str] = Form(None),
     omitir_res_snl: Optional[str] = Form(None),
+    authorization: str = Header(None),
 ):
-    """Endpoint para recibir los 7 archivos KPI y procesarlos"""
+    """Endpoint para recibir los 7 archivos KPI y procesarlos (SOLO ADMIN)"""
+    # Validar que sea admin
+    admin_user = require_admin_jwt(authorization)
+    
     try:
         kpis_omitidos: List[str] = []
         if omitir_tmo == "on":
@@ -741,17 +878,41 @@ async def upload_files(
             "registros": registros,
             "fecha_registro": fecha_registro,
             "kpis_omitidos": kpis_omitidos,
+            "digitador": admin_user,  # Guardar info del admin que subió
         }
 
         return JSONResponse(content={"status": "success", "preview_url": f"/preview/{session_id}"})
 
+    except HTTPException:
+        raise
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
 
 
 @app.get("/preview/{session_id}", response_class=HTMLResponse)
-async def preview_data_view(session_id: str):
-    """Vista previa de datos antes de insertar en BD"""
+async def preview_data_view(session_id: str, t: Optional[str] = None):
+    """Vista previa de datos antes de insertar en BD (SOLO ADMIN)"""
+    # Validar que sea admin usando token de query param
+    if not t:
+        return HTMLResponse(content="""
+        <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
+        <h1 style="color:#ef4444;">⛔ Acceso Denegado</h1>
+        <p>Token de autenticación requerido.</p>
+        <a href="https://www.gtrmanuelmonsalve.cl" style="color:#22c55e;">Volver al Dashboard</a>
+        </body></html>
+        """, status_code=401)
+    
+    try:
+        require_admin_jwt(f"Bearer {t}")
+    except HTTPException as e:
+        return HTMLResponse(content=f"""
+        <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
+        <h1 style="color:#ef4444;">⛔ Acceso Denegado</h1>
+        <p>{e.detail}</p>
+        <a href="https://www.gtrmanuelmonsalve.cl" style="color:#22c55e;">Volver al Dashboard</a>
+        </body></html>
+        """, status_code=e.status_code)
+    
     if session_id not in preview_data:
         return "<h1>Sesión expirada</h1>"
 
@@ -902,19 +1063,64 @@ async def preview_data_view(session_id: str):
   </div>
 
 <script>
+  // --- AUTH: Guardar token de URL en localStorage ---
+  (function() {{
+    const urlParams = new URLSearchParams(window.location.search);
+    const tokenFromUrl = urlParams.get('t');
+    if (tokenFromUrl) {{
+      localStorage.setItem('kpi_token', tokenFromUrl);
+      // Limpiar URL para no mostrar el token
+      window.history.replaceState({{}}, document.title, window.location.pathname);
+    }}
+  }})();
+  
+  // Obtener token del localStorage
+  function getAuthToken() {{
+    return localStorage.getItem('kpi_token');
+  }}
+
+  // Obtener headers con autorización
+  function getAuthHeaders() {{
+    const token = getAuthToken();
+    const headers = {{}};
+    if (token) {{
+      headers['Authorization'] = `Bearer ${{token}}`;
+    }}
+    return headers;
+  }}
+
   async function confirmarInsercion() {{
     const status = document.getElementById('status');
     const btnConfirm = document.querySelector('.btn-confirm');
+
+    // Verificar que hay token
+    const token = getAuthToken();
+    if (!token) {{
+      status.className = 'status error';
+      status.textContent = '✗ No hay sesión activa. Por favor, inicie sesión nuevamente.';
+      status.style.display = 'block';
+      return;
+    }}
 
     btnConfirm.disabled = true;
     btnConfirm.textContent = 'Insertando...';
 
     try {{
       const response = await fetch('/confirm/{session_id}', {{
-        method: 'POST'
+        method: 'POST',
+        headers: getAuthHeaders()
       }});
 
       const result = await response.json();
+
+      if (response.status === 401 || response.status === 403) {{
+        status.className = 'status error';
+        status.textContent = '✗ Sesión expirada o sin permisos. Inicie sesión nuevamente.';
+        status.style.display = 'block';
+        btnConfirm.disabled = false;
+        btnConfirm.textContent = 'Confirmar e Insertar';
+        return;
+      }}
 
       if (response.ok) {{
         status.className = 'status success';
@@ -922,7 +1128,9 @@ async def preview_data_view(session_id: str):
         status.style.display = 'block';
 
         setTimeout(() => {{
-          window.location.href = '/';
+          // Redirigir manteniendo el token en la URL
+          const token = getAuthToken();
+          window.location.href = token ? `/?t=${{token}}` : '/';
         }}, 2000);
       }} else {{
         throw new Error(result.detail || 'Error al procesar datos');
@@ -942,15 +1150,20 @@ async def preview_data_view(session_id: str):
 
 
 @app.post("/confirm/{session_id}")
-async def confirm_insertion(session_id: str):
-    """Confirmar e insertar datos vía n8n"""
+async def confirm_insertion(session_id: str, authorization: str = Header(None)):
+    """Confirmar e insertar datos vía n8n (SOLO ADMIN)"""
+    # Validar que sea admin
+    admin_user = require_admin_jwt(authorization)
+    
     if session_id not in preview_data:
         return JSONResponse(status_code=404, content={"status": "error", "detail": "Sesión no encontrada"})
 
     data = preview_data[session_id]
+    # Usar el digitador guardado en la sesión (o el actual si no existe)
+    digitador = data.get("digitador") or admin_user
 
     try:
-        result = await enviar_a_n8n(data["registros"], data["fecha_registro"])
+        result = await enviar_a_n8n(data["registros"], data["fecha_registro"], digitador=digitador)
 
         if result["success"]:
             del preview_data[session_id]
