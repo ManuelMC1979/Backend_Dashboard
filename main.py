@@ -853,9 +853,59 @@ body {
         this.showPicker && this.showPicker();
       });
     }
+    // Restaurar estado del formulario si existe (para "Volver y Modificar")
+    restoreFormState();
   });
   
   // --- FIN AUTH ---
+
+  // --- PERSISTENCIA DE ESTADO ---
+  const KPI_NAMES = ['tmo', 'transf_epa', 'tipificaciones', 'sat_ep', 'res_ep', 'sat_snl', 'res_snl'];
+  
+  function saveFormState() {
+    const fechaInput = document.querySelector('input[name="fecha_registro"]');
+    const state = {
+      fecha_registro: fechaInput ? fechaInput.value : '',
+      omitir: {}
+    };
+    KPI_NAMES.forEach(name => {
+      const cb = document.getElementById('omitir_' + name);
+      state.omitir[name] = cb ? cb.checked : false;
+    });
+    sessionStorage.setItem('kpi_form_state', JSON.stringify(state));
+    console.log('[KPI] Estado guardado');
+  }
+  
+  function restoreFormState() {
+    const raw = sessionStorage.getItem('kpi_form_state');
+    if (!raw) return;
+    try {
+      const state = JSON.parse(raw);
+      // Restaurar fecha
+      if (state.fecha_registro) {
+        const fechaInput = document.querySelector('input[name="fecha_registro"]');
+        if (fechaInput) fechaInput.value = state.fecha_registro;
+      }
+      // Restaurar checkboxes y aplicar toggleFileInput
+      if (state.omitir) {
+        KPI_NAMES.forEach(name => {
+          const cb = document.getElementById('omitir_' + name);
+          if (cb && state.omitir[name]) {
+            cb.checked = true;
+            toggleFileInput(name);
+          }
+        });
+      }
+      console.log('[KPI] Estado restaurado');
+    } catch (e) {
+      console.error('[KPI] Error restaurando estado:', e);
+    }
+  }
+  
+  function clearFormState() {
+    sessionStorage.removeItem('kpi_form_state');
+  }
+  // --- FIN PERSISTENCIA ---
 
   const filesCache = {};
 
@@ -968,6 +1018,8 @@ body {
       const result = await response.json();
 
       if (response.ok && result.preview_url) {
+        // Guardar estado del formulario antes de ir al preview
+        saveFormState();
         // Redirigir a preview con token en query param
         window.location.href = result.preview_url + '?t=' + encodeURIComponent(authToken);
       } else {
