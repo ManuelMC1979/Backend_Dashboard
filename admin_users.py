@@ -42,6 +42,7 @@ class UserCreateAdmin(BaseModel):
     is_active: Optional[int] = 1
 
 class UserUpdateAdmin(BaseModel):
+    rut: Optional[str] = None
     nombre: Optional[str] = None
     nombre_mostrar: Optional[str] = None
     correo: Optional[str] = None
@@ -209,6 +210,10 @@ def update_user(user_id: int, data: UserUpdateAdmin, authorization: str = Header
     
     fields = []
     values = []
+    
+    if data.rut is not None:
+        fields.append("rut = %s")
+        values.append(data.rut.strip())
     
     if data.nombre is not None:
         fields.append("nombre = %s")
