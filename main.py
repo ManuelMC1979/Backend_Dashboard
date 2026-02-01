@@ -1,7 +1,7 @@
 # main.py
 from __future__ import annotations
 
-from fastapi import FastAPI, File, UploadFile, Form, Header, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, Header, HTTPException, Depends, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Dict, List, Any
@@ -9,10 +9,14 @@ import pandas as pd
 import tempfile
 import os
 from jose import jwt, JWTError
+
+# Variables de entorno
 DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("DB_PASS") or ""
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-in-prod")
+JWT_SECRET = os.getenv("JWT_SECRET")  # REQUERIDO en producción
+JWT_ALG = os.getenv("JWT_ALG", "HS256")
+
 print("[env] DB_PASSWORD_set=", bool(DB_PASSWORD))
-print("[env] JWT_SECRET_set=", bool(JWT_SECRET and JWT_SECRET != "dev-secret-change-in-prod"))
+print("[env] JWT_SECRET_set=", bool(JWT_SECRET))
 from datetime import datetime
 
 # Router de API (tu /api/kpis, etc.)
@@ -45,32 +49,67 @@ app.include_router(admin_users_router, prefix="/api/admin")
 
 # --- JWT AUTH HELPERS (SIN LOGIN - Solo validación de token externo) ---
 
+def extract_bearer_token(authorization: str | None) -> str:
+    """
+    Extrae el token del header Authorization.
+    Formato esperado: "Bearer <token>"
+    Lanza 401 si no es válido.
+    """
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No autenticado - Header Authorization requerido"
+        )
+    
+    if not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Formato de token inválido. Use: Bearer <token>"
+        )
+    
+    return authorization.split(" ", 1)[1]
+
+
 def decode_jwt_token(token: str) -> Dict[str, Any]:
-    """Decodifica y valida un JWT. Retorna claims o lanza excepción."""
+    """
+    Decodifica y valida un JWT.
+    Retorna payload dict o lanza 401/500.
+    """
+    if not JWT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error de configuración: JWT_SECRET no está definido en el servidor"
+        )
+    
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
         return payload
     except JWTError as e:
-        raise HTTPException(status_code=401, detail=f"Token inválido: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Token inválido o expirado: {str(e)}"
+        )
 
 
 def get_current_user_jwt(authorization: str = Header(None)) -> Dict[str, Any]:
     """
     Extrae y valida el usuario desde el header Authorization: Bearer <token>.
-    Retorna dict con: email, rol, nombre_mostrar, rut, nombre
+    Retorna dict con: email, rol, nombre_mostrar, rut, nombre, user_id
+    Lanza 401 si el token es inválido o no contiene email.
     """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="No autenticado - Token requerido")
-    
-    if not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Formato de token inválido. Use: Bearer <token>")
-    
-    token = authorization.split(" ", 1)[1]
+    token = extract_bearer_token(authorization)
     payload = decode_jwt_token(token)
     
-    # Extraer claims estándar
+    # Normalizar campos (algunos tokens usan "correo" en vez de "email")
+    email = payload.get("email") or payload.get("correo")
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido: no contiene email del usuario"
+        )
+    
     return {
-        "email": payload.get("email") or payload.get("correo"),
+        "email": email,
         "rol": payload.get("rol", "ejecutivo"),
         "nombre": payload.get("nombre"),
         "nombre_mostrar": payload.get("nombre_mostrar"),
@@ -79,11 +118,24 @@ def get_current_user_jwt(authorization: str = Header(None)) -> Dict[str, Any]:
     }
 
 
-def require_admin_jwt(authorization: str = Header(None)) -> Dict[str, Any]:
-    """Valida que el usuario sea admin. Retorna user dict o lanza 403."""
-    user = get_current_user_jwt(authorization)
-    if user.get("rol") != "admin":
-        raise HTTPException(status_code=403, detail="Acceso denegado - Solo administradores")
+def require_admin_jwt(user: Dict[str, Any] = Depends(get_current_user_jwt)) -> Dict[str, Any]:
+    """
+    Dependencia que valida que el usuario sea admin.
+    Acepta: rol == "admin" O role_id == 99 (compatibilidad con sistemas legacy)
+    Lanza 403 si no es admin.
+    """
+    rol = user.get("rol", "")
+    role_id = user.get("role_id") or user.get("user_id")  # Algunos sistemas usan role_id
+    
+    # Admin si rol es "admin" o role_id es 99 (compatibilidad legacy)
+    is_admin = (rol == "admin") or (role_id == 99)
+    
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso denegado - Solo administradores pueden realizar esta acción"
+        )
+    
     return user
 
 
@@ -333,7 +385,7 @@ def unificar_datos_kpi(archivos_data: Dict[str, bytes], kpis_omitidos: List[str]
 async def enviar_a_n8n(registros: list, fecha_registro: str, digitador: Optional[Dict[str, Any]] = None):
     """
     Envía los registros al webhook de n8n para procesamiento.
-    Incluye información del digitador (admin que realizó la carga).
+    Incluye información del digitador (admin que realizó la carga) como 'ingresado_por'.
     """
     try:
         import httpx
@@ -346,12 +398,24 @@ async def enviar_a_n8n(registros: list, fecha_registro: str, digitador: Optional
         ]
         mes = meses_esp[fecha_obj.month - 1]
 
+        # Normalizar digitador para el payload
+        if digitador:
+            ingresado_por = {
+                "email": digitador.get("email", "unknown"),
+                "nombre": digitador.get("nombre_mostrar") or digitador.get("nombre", "Desconocido"),
+                "rut": digitador.get("rut"),
+                "rol": digitador.get("rol", "admin"),
+            }
+        else:
+            ingresado_por = {"email": "sistema", "nombre": "Sistema", "rol": "system"}
+
         payload = {
             "registros": registros,
             "fecha_registro": fecha_registro,
             "anio": anio,
             "mes": mes,
-            "digitador": digitador or {"email": "sistema", "nombre": "Sistema", "rol": "system"},
+            "ingresado_por": ingresado_por,  # Campo estándar para n8n
+            "digitador": ingresado_por,  # Alias para compatibilidad
         }
 
         n8n_webhook_url = "https://kpi-dashboard-n8n.f7jaui.easypanel.host/webhook/kpi-upload"
@@ -832,12 +896,9 @@ async def upload_files(
     omitir_res_ep: Optional[str] = Form(None),
     omitir_sat_snl: Optional[str] = Form(None),
     omitir_res_snl: Optional[str] = Form(None),
-    authorization: str = Header(None),
+    admin_user: Dict[str, Any] = Depends(require_admin_jwt),  # Auth via Depends
 ):
     """Endpoint para recibir los 7 archivos KPI y procesarlos (SOLO ADMIN)"""
-    # Validar que sea admin
-    admin_user = require_admin_jwt(authorization)
-    
     try:
         kpis_omitidos: List[str] = []
         if omitir_tmo == "on":
@@ -878,7 +939,7 @@ async def upload_files(
             "registros": registros,
             "fecha_registro": fecha_registro,
             "kpis_omitidos": kpis_omitidos,
-            "ingresado_por": admin_user,  # Guardar info del admin que subió (email, nombre, etc.)
+            "digitador": admin_user,  # Guardar info del admin que subió (email, nombre, etc.)
         }
 
         return JSONResponse(content={"status": "success", "preview_url": f"/preview/{session_id}"})
@@ -890,12 +951,11 @@ async def upload_files(
 
 
 @app.get("/preview/{session_id}", response_class=HTMLResponse)
-async def preview_data_view(session_id: str):
-    """Vista previa de datos antes de insertar en BD.
-    
-    Nota: La autenticación se validó en /upload al crear la sesión.
-    El session_id actúa como token temporal de sesión.
-    """
+async def preview_data_view(
+    session_id: str,
+    admin_user: Dict[str, Any] = Depends(require_admin_jwt),  # Auth via Depends
+):
+    """Vista previa de datos antes de insertar en BD (SOLO ADMIN)."""
     if session_id not in preview_data:
         return HTMLResponse(content="""
         <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
@@ -1127,20 +1187,20 @@ async def preview_data_view(session_id: str):
 
 
 @app.post("/confirm/{session_id}")
-async def confirm_insertion(session_id: str, authorization: str = Header(None)):
+async def confirm_insertion(
+    session_id: str,
+    admin_user: Dict[str, Any] = Depends(require_admin_jwt),  # Auth via Depends
+):
     """Confirmar e insertar datos vía n8n (SOLO ADMIN)"""
-    # Validar que sea admin
-    admin_user = require_admin_jwt(authorization)
-    
     if session_id not in preview_data:
         return JSONResponse(status_code=404, content={"status": "error", "detail": "Sesión no encontrada"})
 
     data = preview_data[session_id]
-    # Usar el ingresado_por guardado en la sesión (o el usuario actual si no existe)
-    ingresado_por = data.get("ingresado_por") or admin_user
+    # Usar el digitador guardado en la sesión (o el usuario actual si no existe)
+    digitador = data.get("digitador") or admin_user
 
     try:
-        result = await enviar_a_n8n(data["registros"], data["fecha_registro"], digitador=ingresado_por)
+        result = await enviar_a_n8n(data["registros"], data["fecha_registro"], digitador=digitador)
 
         if result["success"]:
             del preview_data[session_id]
