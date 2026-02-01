@@ -678,6 +678,7 @@ body {
     </div>
 
     <div class="form-card">
+      <div id="restoreNotice" class="status" style="display:none;"></div>
       <form id="uploadForm" enctype="multipart/form-data">
         <div class="form-group">
           <label>Seleccione fecha del registro</label>
@@ -881,10 +882,14 @@ body {
     if (!raw) return;
     try {
       const state = JSON.parse(raw);
+      let restored = false;
       // Restaurar fecha
       if (state.fecha_registro) {
         const fechaInput = document.querySelector('input[name="fecha_registro"]');
-        if (fechaInput) fechaInput.value = state.fecha_registro;
+        if (fechaInput) {
+          fechaInput.value = state.fecha_registro;
+          restored = true;
+        }
       }
       // Restaurar checkboxes y aplicar toggleFileInput
       if (state.omitir) {
@@ -893,8 +898,18 @@ body {
           if (cb && state.omitir[name]) {
             cb.checked = true;
             toggleFileInput(name);
+            restored = true;
           }
         });
+      }
+      // Mostrar aviso solo si se restauró algo
+      if (restored) {
+        const notice = document.getElementById('restoreNotice');
+        if (notice) {
+          notice.className = 'status success';
+          notice.textContent = 'Se restauró la fecha (y omitidos si aplica). Por seguridad del navegador, debe volver a seleccionar los archivos antes de procesar.';
+          notice.style.display = 'block';
+        }
       }
       console.log('[KPI] Estado restaurado');
     } catch (e) {
