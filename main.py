@@ -8,7 +8,7 @@ from typing import Optional, Dict, List, Any
 import pandas as pd
 import tempfile
 import os
-import httpx
+import httpx  # Solo para enviar a n8n
 
 # Variables de entorno
 DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("DB_PASS") or ""
@@ -17,7 +17,7 @@ print("[env] DB_PASSWORD_set=", bool(DB_PASSWORD))
 from datetime import datetime
 
 # Router de API (tu /api/kpis, etc.)
-from api_dashboard import router as api_router
+from api_dashboard import router as api_router, TOKENS, ROLE_MAP, get_db_conn
 from admin_users import router as admin_users_router
 
 
@@ -44,73 +44,79 @@ app.include_router(api_router, prefix="/api")
 app.include_router(admin_users_router, prefix="/api/admin")
 
 
-# --- TOKEN AUTH HELPERS (Token opaco - validación contra API principal) ---
-
-# URL del API principal para validar tokens
-MAIN_API_URL = os.getenv("MAIN_API_URL", "https://api.gtrmanuelmonsalve.cl")
+# --- TOKEN AUTH HELPERS (Validación LOCAL usando TOKENS dict) ---
 
 
-async def validate_token_with_main_api(token: str) -> Dict[str, Any]:
+def get_current_user_from_token_local(token: str) -> Dict[str, Any]:
     """
-    Valida un token opaco consultando al API principal.
-    NO decodifica JWT localmente - el token es opaco.
-    
-    Request: GET {MAIN_API_URL}/api/auth/me
-    Header: Authorization: Bearer <token>
+    Valida un token opaco contra el diccionario TOKENS local.
+    Igual que admin_users.py pero recibe el token directamente.
     
     Returns: dict con datos del usuario si es válido
     Raises: HTTPException 401 si el token es inválido
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{MAIN_API_URL}/api/auth/me",
-                headers={"Authorization": f"Bearer {token}"}
-            )
-        
-        if response.status_code == 200:
-            return response.json()
-        
-        # Token inválido o expirado
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token requerido"
+        )
+    
+    session = TOKENS.get(token)
+    if not session:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido o expirado"
         )
     
-    except httpx.RequestError as e:
-        # Error de conexión al API principal
+    # Verificar expiración
+    if datetime.utcnow() > session["expires_at"]:
+        del TOKENS[token]
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"No se pudo validar el token: {str(e)}"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expirado"
         )
-
-
-async def require_admin_token(token: str) -> Dict[str, Any]:
-    """
-    Valida que el token sea de un usuario admin.
     
-    Criterios de admin (cualquiera):
-    - user.rol == "admin"
-    - user.role_id == 99 o 1
-    - user.is_admin == true
+    # Obtener usuario de la BD
+    conn = get_db_conn()
+    cur = None
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT id, nombre, nombre_mostrar, correo, rut, is_active, role_id FROM users WHERE id = %s",
+            (session["user_id"],)
+        )
+        user = cur.fetchone()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Usuario no encontrado"
+            )
+        if not user["is_active"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Usuario inactivo"
+            )
+        
+        user["rol"] = ROLE_MAP.get(int(user["role_id"]), "ejecutivo")
+        user["email"] = user.get("correo")
+        return user
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+def require_admin_local(token: str) -> Dict[str, Any]:
+    """
+    Valida que el token sea de un usuario admin usando TOKENS local.
     
     Returns: dict con datos del usuario admin
     Raises: HTTPException 401/403
     """
-    user = await validate_token_with_main_api(token)
+    user = get_current_user_from_token_local(token)
     
-    # Verificar si es admin por cualquiera de los criterios
-    rol = user.get("rol", "")
-    role_id = user.get("role_id")
-    is_admin_flag = user.get("is_admin", False)
-    
-    is_admin = (
-        rol == "admin" or
-        role_id in (99, 1) or
-        is_admin_flag is True
-    )
-    
-    if not is_admin:
+    if user.get("rol") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Acceso denegado - Solo administradores"
@@ -493,9 +499,9 @@ body {
 </html>
         """, status_code=401)
     
-    # Validar token con API principal
+    # Validar token LOCAL (TOKENS dict)
     try:
-        admin_user = await require_admin_token(t)
+        admin_user = require_admin_local(t)
     except HTTPException as e:
         error_msg = e.detail if hasattr(e, 'detail') else "Token inválido"
         return HTMLResponse(content=f"""
@@ -953,9 +959,9 @@ async def upload_files(
     authorization: str = Header(None),
 ):
     """Endpoint para recibir los 7 archivos KPI y procesarlos (SOLO ADMIN)"""
-    # Validar token opaco via API principal
+    # Validar token LOCAL (TOKENS dict)
     token = extract_bearer_token(authorization)
-    admin_user = await require_admin_token(token)
+    admin_user = require_admin_local(token)
     
     try:
         kpis_omitidos: List[str] = []
@@ -1017,7 +1023,7 @@ async def preview_data_view(
     
     Requiere token en query param: /preview/{id}?t=TOKEN
     """
-    # Validar token
+    # Validar token LOCAL (TOKENS dict)
     if not t:
         return HTMLResponse(content="""
         <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
@@ -1028,7 +1034,7 @@ async def preview_data_view(
         """, status_code=401)
     
     try:
-        await require_admin_token(t)
+        require_admin_local(t)
     except HTTPException as e:
         return HTMLResponse(content=f"""
         <html><body style="background:#0a1929;color:#fff;font-family:sans-serif;text-align:center;padding:100px;">
@@ -1274,9 +1280,9 @@ async def confirm_insertion(
     authorization: str = Header(None),
 ):
     """Confirmar e insertar datos vía n8n (SOLO ADMIN)"""
-    # Validar token opaco via API principal
+    # Validar token LOCAL (TOKENS dict)
     token = extract_bearer_token(authorization)
-    admin_user = await require_admin_token(token)
+    admin_user = require_admin_local(token)
     
     if session_id not in preview_data:
         return JSONResponse(status_code=404, content={"status": "error", "detail": "Sesión no encontrada"})
