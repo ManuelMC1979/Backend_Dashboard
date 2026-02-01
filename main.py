@@ -14,6 +14,7 @@ from datetime import datetime
 
 # Router de API (tu /api/kpis, etc.)
 from api_dashboard import router as api_router
+from admin_users import router as admin_users_router
 
 
 app = FastAPI()
@@ -36,6 +37,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+app.include_router(admin_users_router, prefix="/api/admin")
 
 
 def normalizar_valor(valor) -> Optional[float]:

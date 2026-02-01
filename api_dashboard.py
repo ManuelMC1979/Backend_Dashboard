@@ -73,7 +73,7 @@ def login(payload: Dict[str, Any]):
     try:
         cur = conn.cursor(dictionary=True)
         cur.execute(
-            "SELECT id, nombre, correo, password_hash, is_active, role_id FROM users WHERE correo = %s",
+            "SELECT id, nombre, nombre_mostrar, correo, password_hash, is_active, role_id FROM users WHERE correo = %s",
             (email,)
         )
         user = cur.fetchone()
@@ -98,12 +98,16 @@ def login(payload: Dict[str, Any]):
         expires_at = datetime.utcnow() + timedelta(hours=12)
         TOKENS[token] = {"user_id": user["id"], "expires_at": expires_at}
 
+        # nombre_mostrar tiene prioridad sobre nombre para el frontend
+        nombre_display = user.get("nombre_mostrar") or user["nombre"]
+
         print(f"[auth] login ok user_id={user['id']}")
         return {
             "token": token,
             "usuario": {
                 "id": user["id"],
-                "nombre": user["nombre"],
+                "nombre": nombre_display,
+                "nombre_mostrar": user.get("nombre_mostrar"),
                 "correo": user["correo"],
                 "rol": role_str,
             },
